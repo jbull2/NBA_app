@@ -1,0 +1,4 @@
+[server]
+headless = true
+enableCORS = false
+address = "0.0.0.0"
