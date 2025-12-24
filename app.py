@@ -15,15 +15,17 @@ from auth import require_login
 # ---------------------------
 # AUTH
 # ---------------------------
+from auth import require_login, logout
+
 if not require_login():
     st.stop()
 
 with st.sidebar:
     st.markdown("### Account")
-    st.write(f"Logged in as **{st.session_state.get('user')}**")
+    st.write(f"Logged in as **{st.session_state.user}**")
+
     if st.button("Logout"):
-        st.session_state.authenticated = False
-        st.rerun()
+        logout()
 
 # ---------------------------
 # Page config
