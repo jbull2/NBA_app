@@ -4,13 +4,18 @@ import streamlit as st
 
 def get_users():
     """
-    Load users from Streamlit secrets (local / Streamlit Cloud)
-    or from environment variables (Render).
+    Load users safely from:
+    1) Streamlit secrets (local / Streamlit Cloud)
+    2) Environment variable (Render)
     """
 
-    # 1️⃣ Streamlit secrets (local dev or Streamlit Cloud)
-    if "auth" in st.secrets and "users" in st.secrets["auth"]:
-        return dict(st.secrets["auth"]["users"])
+    # 1️⃣ Streamlit secrets (ONLY if they exist)
+    try:
+        if "auth" in st.secrets and "users" in st.secrets["auth"]:
+            return dict(st.secrets["auth"]["users"])
+    except Exception:
+        # secrets.toml does not exist
+        pass
 
     # 2️⃣ Environment variable fallback (Render)
     # Format: AUTH_USERS="user1:pass1,user2:pass2"
@@ -18,7 +23,7 @@ def get_users():
     if env_users:
         return dict(pair.split(":") for pair in env_users.split(","))
 
-    # 3️⃣ No auth configured
+    # 3️⃣ Nothing configured
     return {}
 
 
