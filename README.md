@@ -67,7 +67,9 @@ pip install streamlit pandas numpy nba_api
 Tip: Always ensure the virtual environment is active before installing packages.
 
 ### 4️⃣ Run the Streamlit app
+```
 python -m streamlit run app.py
+```
 
 The app will open automatically in your browser at:
 
