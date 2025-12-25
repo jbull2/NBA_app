@@ -51,15 +51,19 @@ cd NBA_app
 ```
 
 ### 2️⃣ Activate the virtual environment
+```
 venv\Scripts\Activate.ps1
+```
 
 If PowerShell blocks execution, run:
-
+```
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
 
 ### 3️⃣ Install dependencies
+```
 pip install streamlit pandas numpy nba_api
-
+```
 Tip: Always ensure the virtual environment is active before installing packages.
 
 ### 4️⃣ Run the Streamlit app
