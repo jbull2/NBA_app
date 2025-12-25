@@ -27,6 +27,7 @@ This project focuses on **data exploration and betting analysis** — no machine
 
 ## 📁 Project Structure
 
+```
 NBA_app/
 ├── app.py
 ├── main.py
@@ -39,6 +40,7 @@ NBA_app/
 ├── venv/
 ├── README.md
 └── requirements.txt
+```
 
 ## 🖥️ Getting Started (Windows)
 
