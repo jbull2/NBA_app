@@ -20,34 +20,23 @@ def team_logo_url(team_abbr: str) -> str:
 # ---------------------------
 # Rolling feature helper (ML-ready)
 # ---------------------------
-def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_rolling_features(df: pd.DataFrame, cols: list[str], windows=(5, 10)) -> pd.DataFrame:
     """
-    Adds rolling last-5 and last-10 averages for core stats.
-    Uses shift(1) to prevent data leakage.
-    Assumes GAME_DATE exists.
+    Adds rolling means using *previous* games only (shifted by 1 to avoid leakage).
+    Creates columns like PTS_L5, PTS_L10, etc.
     """
+    df = df.sort_values("GAME_DATE", ascending=True).reset_index(drop=True)
 
-    df = df.sort_values("GAME_DATE").reset_index(drop=True)
+    for c in cols:
+        if c not in df.columns:
+            continue
+        s = pd.to_numeric(df[c], errors="coerce")
+        for w in windows:
+            df[f"{c}_L{w}"] = s.shift(1).rolling(w, min_periods=1).mean()
 
-    rolling_stats = ["PTS", "REB", "AST", "FG3M", "MIN"]
-
-    for stat in rolling_stats:
-        df[f"{stat}_L5"] = (
-            df[stat]
-            .rolling(window=5, min_periods=1)
-            .mean()
-            .shift(1)
-        )
-
-        df[f"{stat}_L10"] = (
-            df[stat]
-            .rolling(window=10, min_periods=1)
-            .mean()
-            .shift(1)
-        )
-
-    return df.sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
-
+    # return to newest-first for UI
+    df = df.sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+    return df
 
 # ---------------------------
 # Cached wrapper
@@ -150,10 +139,27 @@ def fetch_player_logs(
     # ---------------------------
     # Derived prop stats
     # ---------------------------
-    logs["Pts+Reb+Ast"] = logs["PTS"] + logs["REB"] + logs["AST"]
-    logs["Pts+Reb"] = logs["PTS"] + logs["REB"]
-    logs["Pts+Ast"] = logs["PTS"] + logs["AST"]
-    logs["Reb+Ast"] = logs["REB"] + logs["AST"]
+    logs["PRA"] = logs["PTS"] + logs["REB"] + logs["AST"]
+    logs["PR"]  = logs["PTS"] + logs["REB"]
+    logs["PA"]  = logs["PTS"] + logs["AST"]
+    logs["RA"]  = logs["REB"] + logs["AST"]
+
+    # keep your existing names too if you want backwards compatibility
+    logs["Pts+Reb+Ast"] = logs["PRA"]
+    logs["Pts+Reb"] = logs["PR"]
+    logs["Pts+Ast"] = logs["PA"]
+    logs["Reb+Ast"] = logs["RA"]
+    
+    # ---------------------------
+    # Rolling features (L5 / L10)
+    # ---------------------------
+    ROLLING_COLS = [
+        "MIN",
+        "PTS", "REB", "AST", "FG3M",
+        "PRA", "PR", "PA", "RA",
+    ]
+
+    logs = add_rolling_features(logs, cols=ROLLING_COLS, windows=(5, 10))
 
     # ---------------------------
     # Double / Triple Double
