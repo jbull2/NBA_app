@@ -131,28 +131,42 @@ def parse_matchup_team_opp(matchup: str):
 def ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
+    # --- Dates & order ---
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
     df = df.dropna(subset=["GAME_DATE"])
     df = df.sort_values("GAME_DATE")
 
-    # TEAM / OPP
+    # --- TEAM / OPP ---
     if "TEAM_ABBR" not in df.columns:
         df["TEAM_ABBR"] = df["MATCHUP"].astype(str).str[:3]
     if "OPP_ABBR" not in df.columns:
         df["OPP_ABBR"] = df["MATCHUP"].astype(str).str[-3:]
 
-    # Derived stats
+    # --- Derived stats ---
     df["Pts+Reb+Ast"] = df["PTS"] + df["REB"] + df["AST"]
     df["Pts+Reb"] = df["PTS"] + df["REB"]
     df["Pts+Ast"] = df["PTS"] + df["AST"]
     df["Reb+Ast"] = df["REB"] + df["AST"]
 
-    # Rolling averages (SAFE)
-    for stat in ["PTS", "REB", "AST", "FG3M"]:
-        df[f"{stat}_L5"] = df[stat].rolling(5).mean()
-        df[f"{stat}_L10"] = df[stat].rolling(10).mean()
+    # --- All stats we want rolling context for ---
+    ROLLING_STATS = [
+        "PTS", "REB", "AST", "FG3M", "MIN",
+        "Pts+Reb+Ast", "Pts+Reb", "Pts+Ast", "Reb+Ast",
+    ]
+
+    for stat in ROLLING_STATS:
+        if stat in df.columns:
+            df[f"{stat}_L5"] = df[stat].rolling(5, min_periods=1).mean()
+            df[f"{stat}_L10"] = df[stat].rolling(10, min_periods=1).mean()
 
     return df
+
+def last_n_values(df, stat, n=5):
+    return (
+        df.sort_values("GAME_DATE", ascending=False)
+          .head(n)[stat]
+          .tolist()
+    )
 
 # ---------------------------
 # Session state
@@ -338,6 +352,7 @@ if is_mobile:
         odds_type = st.selectbox("Odds Type", ["American", "Decimal"], key="prop_odds_type")
     with p5:
         odds = st.number_input("Odds", value=-110.0 if odds_type == "American" else 1.91, step=1.0 if odds_type == "American" else 0.01, key="prop_odds")
+
 else:
     left, right = st.columns([2, 3])
     with left:
