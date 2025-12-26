@@ -13,6 +13,9 @@ from nba_api.stats.static import players
 
 from auth import require_login, logout
 
+if "logs" not in st.session_state:
+    st.session_state.logs = None
+
 # ---------------------------
 # Feature flags
 # ---------------------------
@@ -127,10 +130,12 @@ def parse_matchup_team_opp(matchup: str):
 
 def ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
     df = df.dropna(subset=["GAME_DATE"])
+    df = df.sort_values("GAME_DATE")
 
-    # TEAM_ABBR and OPP_ABBR derived safely from MATCHUP
+    # TEAM / OPP
     if "TEAM_ABBR" not in df.columns:
         df["TEAM_ABBR"] = df["MATCHUP"].astype(str).str[:3]
     if "OPP_ABBR" not in df.columns:
@@ -141,6 +146,11 @@ def ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
     df["Pts+Reb"] = df["PTS"] + df["REB"]
     df["Pts+Ast"] = df["PTS"] + df["AST"]
     df["Reb+Ast"] = df["REB"] + df["AST"]
+
+    # Rolling averages (SAFE)
+    for stat in ["PTS", "REB", "AST", "FG3M"]:
+        df[f"{stat}_L5"] = df[stat].rolling(5).mean()
+        df[f"{stat}_L10"] = df[stat].rolling(10).mean()
 
     return df
 
@@ -165,7 +175,8 @@ if st.button("Fetch Game Logs") and player:
     st.session_state.logs = st.session_state.cache[player]
     loader.empty()
 
-if "logs" not in st.session_state:
+if st.session_state.logs is None:
+    st.info("Search for a player to load game logs.")
     st.stop()
 
 logs = ensure_cols(st.session_state.logs).sort_values("GAME_DATE", ascending=False)
@@ -216,15 +227,29 @@ elif recent_filter == "Last 10":
     flt = flt.head(10)
 
 # ---------------------------
-# Averages (PTS/REB/AST/3PM only)
+# Averages (Season + Rolling)
 # ---------------------------
-st.subheader("Season Averages")
+st.subheader("Averages")
+
 a, b, c, d = st.columns(4)
-avg = flt[["PTS", "REB", "AST", "FG3M"]].mean().round(2)
-a.metric("PTS", avg["PTS"])
-b.metric("REB", avg["REB"])
-c.metric("AST", avg["AST"])
-d.metric("3PM", avg["FG3M"])
+
+season_avg = flt[["PTS", "REB", "AST", "FG3M"]].mean().round(2)
+
+rolling_5 = flt[["PTS_L5", "REB_L5", "AST_L5", "FG3M_L5"]].mean().round(2)
+rolling_10 = flt[["PTS_L10", "REB_L10", "AST_L10", "FG3M_L10"]].mean().round(2)
+
+a.metric("PTS", f"{season_avg['PTS']:.1f}", f"L5 {rolling_5['PTS_L5']:.1f}")
+b.metric("REB", f"{season_avg['REB']:.1f}", f"L5 {rolling_5['REB_L5']:.1f}")
+c.metric("AST", f"{season_avg['AST']:.1f}", f"L5 {rolling_5['AST_L5']:.1f}")
+d.metric("3PM", f"{season_avg['FG3M']:.1f}", f"L5 {rolling_5['FG3M_L5']:.1f}")
+
+st.caption(
+    f"Rolling context — L10: "
+    f"PTS {rolling_10['PTS_L10']:.1f} • "
+    f"REB {rolling_10['REB_L10']:.1f} • "
+    f"AST {rolling_10['AST_L10']:.1f} • "
+    f"3PM {rolling_10['FG3M_L10']:.1f}"
+)
 
 # ---------------------------
 # Parlay UI (top-right popover trigger)
@@ -268,6 +293,31 @@ odds = -110.0
 # Prop Evaluation (narrower on desktop)
 # ---------------------------
 st.subheader("Prop Evaluation")
+
+# Rolling form context (latest game row)
+latest = flt.iloc[0] if not flt.empty else None
+
+# ---------------------------
+# Rolling averages context
+# ---------------------------
+if latest is not None:
+    l5_col = f"{prop_type}_L5"
+    l10_col = f"{prop_type}_L10"
+
+    if l5_col in latest and l10_col in latest:
+        if not pd.isna(latest[l5_col]) and not pd.isna(latest[l10_col]):
+            st.caption(
+                f"📈 Form — "
+                f"Last 5: {latest[l5_col]:.1f} • "
+                f"Last 10: {latest[l10_col]:.1f}"
+            )
+
+if latest is not None and f"{prop_type}_L5" in latest:
+    st.caption(
+        f"Form context — "
+        f"L5: {latest[f'{prop_type}_L5']:.1f} • "
+        f"L10: {latest[f'{prop_type}_L10']:.1f}"
+    )
 
 LINE_OPTIONS = [x * 0.5 for x in range(0, 121)]  # 0.0 .. 60.0
 
@@ -369,8 +419,16 @@ st.subheader(f"Showing {len(flt)} games")
 
 if not is_mobile:
     # Desktop table view
-    show_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "FG3M"]
-    st.dataframe(flt[show_cols].reset_index(drop=True), use_container_width=True)
+    show_cols = [
+        "GAME_DATE", "MATCHUP", "MIN",
+        "PTS", "REB", "AST", "FG3M",
+        "PTS_L5", "PTS_L10"
+    ]
+
+    st.dataframe(
+        flt[show_cols].reset_index(drop=True),
+        use_container_width=True
+    )
 else:
     # Mobile card view (compact HTML, include logos + extra stats)
     for _, r in flt.iterrows():
