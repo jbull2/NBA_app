@@ -326,28 +326,6 @@ st.subheader("Prop Evaluation")
 # Rolling form context (latest game row)
 latest = flt.iloc[0] if not flt.empty else None
 
-# ---------------------------
-# Rolling averages context
-# ---------------------------
-if latest is not None:
-    l5_col = f"{prop_type}_L5"
-    l10_col = f"{prop_type}_L10"
-
-    if l5_col in latest and l10_col in latest:
-        if not pd.isna(latest[l5_col]) and not pd.isna(latest[l10_col]):
-            st.caption(
-                f"📈 Form — "
-                f"Last 5: {latest[l5_col]:.1f} • "
-                f"Last 10: {latest[l10_col]:.1f}"
-            )
-
-if latest is not None and f"{prop_type}_L5" in latest:
-    st.caption(
-        f"Form context — "
-        f"L5: {latest[f'{prop_type}_L5']:.1f} • "
-        f"L10: {latest[f'{prop_type}_L10']:.1f}"
-    )
-
 LINE_OPTIONS = [x * 0.5 for x in range(0, 121)]  # 0.0 .. 60.0
 
 STAT_OPTIONS = [
@@ -451,9 +429,7 @@ if not is_mobile:
     # Desktop table view
     show_cols = [
         "GAME_DATE", "MATCHUP", "MIN",
-        "PTS", "REB", "AST", "FG3M",
-        "PTS_L5", "PTS_L10", "REB_L5", "REB_L10", "AST_L5", "AST_L10",
-        'MIN_L5', 'MIN_L10', 'FG3M_L5', 'FG3M_L10'
+        "PTS", "REB", "AST", "FG3M"
     ]
 
     st.dataframe(
