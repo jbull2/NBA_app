@@ -128,6 +128,32 @@ def parse_matchup_team_opp(matchup: str):
     opp = opp.strip()
     return team, opp
 
+def ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
+    df = df.dropna(subset=["GAME_DATE"])
+    df = df.sort_values("GAME_DATE")
+
+    # TEAM / OPP
+    if "TEAM_ABBR" not in df.columns:
+        df["TEAM_ABBR"] = df["MATCHUP"].astype(str).str[:3]
+    if "OPP_ABBR" not in df.columns:
+        df["OPP_ABBR"] = df["MATCHUP"].astype(str).str[-3:]
+
+    # Derived stats
+    df["Pts+Reb+Ast"] = df["PTS"] + df["REB"] + df["AST"]
+    df["Pts+Reb"] = df["PTS"] + df["REB"]
+    df["Pts+Ast"] = df["PTS"] + df["AST"]
+    df["Reb+Ast"] = df["REB"] + df["AST"]
+
+    # Rolling averages (SAFE)
+    for stat in ["PTS", "REB", "AST", "FG3M"]:
+        df[f"{stat}_L5"] = df[stat].rolling(5).mean()
+        df[f"{stat}_L10"] = df[stat].rolling(10).mean()
+
+    return df
+
 def add_rolling_features(df, cols=None):
     """
     Adds L5 and L10 rolling averages for specified columns.
