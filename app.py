@@ -422,7 +422,8 @@ if not is_mobile:
     show_cols = [
         "GAME_DATE", "MATCHUP", "MIN",
         "PTS", "REB", "AST", "FG3M",
-        "PTS_L5", "PTS_L10"
+        "PTS_L5", "PTS_L10", "REB_L5", "REB_L10", "AST_L5", "AST_L10",
+        'MIN_L5', 'MIN_L10', 'FG3M_L5', 'FG3M_L10'
     ]
 
     st.dataframe(
