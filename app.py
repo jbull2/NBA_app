@@ -128,36 +128,25 @@ def parse_matchup_team_opp(matchup: str):
     opp = opp.strip()
     return team, opp
 
-def ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
+def add_rolling_features(df, cols=None):
+    """
+    Adds L5 and L10 rolling averages for specified columns.
+    If cols is None, uses a sensible default set.
+    """
     df = df.copy()
 
-    # --- Dates & order ---
-    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
-    df = df.dropna(subset=["GAME_DATE"])
+    if cols is None:
+        cols = [
+            "PTS", "REB", "AST", "FG3M", "MIN",
+            "Pts+Reb+Ast", "Pts+Reb", "Pts+Ast", "Reb+Ast"
+        ]
+
     df = df.sort_values("GAME_DATE")
 
-    # --- TEAM / OPP ---
-    if "TEAM_ABBR" not in df.columns:
-        df["TEAM_ABBR"] = df["MATCHUP"].astype(str).str[:3]
-    if "OPP_ABBR" not in df.columns:
-        df["OPP_ABBR"] = df["MATCHUP"].astype(str).str[-3:]
-
-    # --- Derived stats ---
-    df["Pts+Reb+Ast"] = df["PTS"] + df["REB"] + df["AST"]
-    df["Pts+Reb"] = df["PTS"] + df["REB"]
-    df["Pts+Ast"] = df["PTS"] + df["AST"]
-    df["Reb+Ast"] = df["REB"] + df["AST"]
-
-    # --- All stats we want rolling context for ---
-    ROLLING_STATS = [
-        "PTS", "REB", "AST", "FG3M", "MIN",
-        "Pts+Reb+Ast", "Pts+Reb", "Pts+Ast", "Reb+Ast",
-    ]
-
-    for stat in ROLLING_STATS:
-        if stat in df.columns:
-            df[f"{stat}_L5"] = df[stat].rolling(5, min_periods=1).mean()
-            df[f"{stat}_L10"] = df[stat].rolling(10, min_periods=1).mean()
+    for col in cols:
+        if col in df.columns:
+            df[f"{col}_L5"] = df[col].rolling(5, min_periods=1).mean()
+            df[f"{col}_L10"] = df[col].rolling(10, min_periods=1).mean()
 
     return df
 
