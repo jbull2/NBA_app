@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
 import sys
+import numpy as np
 from pathlib import Path
+from datetime import datetime
 
 # ---------------------------
 # Ensure project root on path
@@ -10,59 +12,25 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 from services.nba_player_logs import fetch_player_logs
 from nba_api.stats.static import players
-
-from auth import require_login, logout
-
-if "logs" not in st.session_state:
-    st.session_state.logs = None
-
-# ---------------------------
-# Feature flags
-# ---------------------------
-USE_AUTH = False  # set to False to disable login
-
-# ---------------------------
-# AUTH (optional)
-# ---------------------------
-if USE_AUTH:
-
-    if not require_login():
-        st.stop()
-
-    with st.sidebar:
-        st.markdown("### Account")
-        st.write(f"Logged in as **{st.session_state.get('user', '')}**")
-
-        if st.button("Logout"):
-            logout()
+from services.lineups import show_lineups_page
 
 # ---------------------------
 # Page config
 # ---------------------------
 st.set_page_config(page_title="NBA Player Game Logs", layout="wide")
-st.title("🏀 NBA Player Game Log & Prop Analysis")
 
 # ---------------------------
-# CSS
+# Session state initialization
 # ---------------------------
-st.markdown(
-    """
-<style>
-@keyframes bounce{0%,100%{transform:translateY(0);}50%{transform:translateY(-18px);}}
-.loader{display:flex;flex-direction:column;align-items:center;justify-content:center;margin:28px 0;}
-.ball{font-size:52px;animation:bounce .8s infinite ease-in-out;}
-.loader-text{margin-top:10px;font-size:14px;color:#666;}
-@keyframes fadeUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
-.card{animation:fadeUp .35s ease-out forwards;}
-/* Parlay button row look */
-.parlay-row{display:flex;justify-content:flex-end;gap:10px;align-items:center;margin-top:-8px;margin-bottom:10px;}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+if "logs" not in st.session_state:
+    st.session_state.logs = None
+if "cache" not in st.session_state:
+    st.session_state.cache = {}
+if "parlay" not in st.session_state:
+    st.session_state.parlay = []
 
 # ---------------------------
-# Team data
+# Constants & Team Data
 # ---------------------------
 TEAM_ABBR_TO_ID = {
     "ATL": 1610612737, "BOS": 1610612738, "BKN": 1610612751, "CHA": 1610612766,
@@ -98,7 +66,6 @@ TEAM_COLORS = {
 # ---------------------------
 @st.cache_data(show_spinner=False)
 def load_players():
-    # Active only
     return sorted(p["full_name"] for p in players.get_active_players())
 
 def headshot(pid: int) -> str:
@@ -112,372 +79,158 @@ def american_to_decimal(o: float) -> float:
     return (o / 100.0 + 1.0) if o > 0 else (100.0 / abs(o) + 1.0)
 
 def decimal_to_american(d: float) -> str:
-    if d <= 1:
-        return "N/A"
+    if d <= 1: return "N/A"
     return f"+{int((d - 1) * 100)}" if d >= 2 else f"-{int(100 / (d - 1))}"
-
-def parse_matchup_team_opp(matchup: str):
-    # "DEN vs. LAL" or "DEN @ LAL"
-    if "vs." in matchup:
-        team, opp = matchup.split(" vs. ")
-    elif " @ " in matchup:
-        team, opp = matchup.split(" @ ")
-    else:
-        team, opp = matchup[:3], matchup[-3:]
-    team = team.strip()
-    opp = opp.strip()
-    return team, opp
 
 def ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-
+    numeric_cols = ["PTS", "REB", "AST", "FG3M", "MIN"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
     df = df.dropna(subset=["GAME_DATE"])
-    df = df.sort_values("GAME_DATE")
-
-    # TEAM / OPP
     if "TEAM_ABBR" not in df.columns:
         df["TEAM_ABBR"] = df["MATCHUP"].astype(str).str[:3]
     if "OPP_ABBR" not in df.columns:
         df["OPP_ABBR"] = df["MATCHUP"].astype(str).str[-3:]
-
-    # Derived stats
     df["Pts+Reb+Ast"] = df["PTS"] + df["REB"] + df["AST"]
     df["Pts+Reb"] = df["PTS"] + df["REB"]
     df["Pts+Ast"] = df["PTS"] + df["AST"]
     df["Reb+Ast"] = df["REB"] + df["AST"]
-
-    # Rolling averages (SAFE)
-    for stat in ["PTS", "REB", "AST", "FG3M"]:
-        df[f"{stat}_L5"] = df[stat].rolling(5).mean()
-        df[f"{stat}_L10"] = df[stat].rolling(10).mean()
-
-    return df
-
-def add_rolling_features(df, cols=None):
-    """
-    Adds L5 and L10 rolling averages for specified columns.
-    If cols is None, uses a sensible default set.
-    """
-    df = df.copy()
-
-    if cols is None:
-        cols = [
-            "PTS", "REB", "AST", "FG3M", "MIN",
-            "Pts+Reb+Ast", "Pts+Reb", "Pts+Ast", "Reb+Ast"
-        ]
-
-    df = df.sort_values("GAME_DATE")
-
-    for col in cols:
-        if col in df.columns:
-            df[f"{col}_L5"] = df[col].rolling(5, min_periods=1).mean()
-            df[f"{col}_L10"] = df[col].rolling(10, min_periods=1).mean()
-
-    return df
-
-def last_n_values(df, stat, n=5):
-    return (
-        df.sort_values("GAME_DATE", ascending=False)
-          .head(n)[stat]
-          .tolist()
-    )
+    return df.sort_values("GAME_DATE", ascending=False)
 
 # ---------------------------
-# Session state
+# Navigation Routing
 # ---------------------------
-if "cache" not in st.session_state:
-    st.session_state.cache = {}
-if "parlay" not in st.session_state:
-    st.session_state.parlay = []
+with st.sidebar:
+    st.title("Navigation")
+    page = st.radio("Go to", ["Prop Analysis", "Lineups & Injuries"])
+    st.divider()
+
+if page == "Lineups & Injuries":
+    show_lineups_page(TEAM_ABBR_TO_ID)
+    st.stop()
 
 # ---------------------------
-# Search
+# PROP ANALYSIS PAGE
 # ---------------------------
+st.title("🏀 NBA Player Game Log & Prop Analysis")
 player = st.selectbox("Search active player", load_players(), index=None)
 
 if st.button("Fetch Game Logs") and player:
-    loader = st.empty()
-    loader.markdown('<div class="loader"><div class="ball">🏀</div><div class="loader-text">Loading…</div></div>', unsafe_allow_html=True)
     if player not in st.session_state.cache:
         st.session_state.cache[player] = fetch_player_logs(player)
-    st.session_state.logs = st.session_state.cache[player]
-    loader.empty()
+    st.session_state.logs = ensure_cols(st.session_state.cache[player])
 
 if st.session_state.logs is None:
     st.info("Search for a player to load game logs.")
     st.stop()
 
-logs = ensure_cols(st.session_state.logs).sort_values("GAME_DATE", ascending=False)
-
-# ---------------------------
-# Player Header
-# ---------------------------
+logs = st.session_state.logs
 pid = int(logs["PLAYER_ID"].iloc[0])
 team_abbr = str(logs["TEAM_ABBR"].iloc[0])
 player_name = str(logs["PLAYER_NAME"].iloc[0])
 c1, c2 = TEAM_COLORS.get(team_abbr, ("#111111", "#222222"))
 
+# Player Header
 st.markdown(
     f'<div style="background:linear-gradient(135deg,{c1},{c2});border-radius:16px;padding:18px;color:white;margin-bottom:18px;">'
     f'<div style="display:flex;align-items:center;justify-content:space-between;">'
     f'<div style="display:flex;gap:16px;align-items:center;">'
     f'<img src="{headshot(pid)}" style="width:88px;height:88px;border-radius:50%;border:2px solid rgba(255,255,255,.4);object-fit:cover;">'
-    f'<div><div style="font-size:26px;font-weight:800;line-height:1.05;">{player_name}</div><div style="margin-top:6px;font-size:13px;opacity:.9;">{team_abbr}</div></div>'
+    f'<div><div style="font-size:26px;font-weight:800;">{player_name}</div><div style="font-size:13px;opacity:.9;">{team_abbr}</div></div>'
     f'</div>'
-    f'<img src="{team_logo(team_abbr)}" style="width:74px;height:74px;object-fit:contain;filter:drop-shadow(0 6px 10px rgba(0,0,0,.3));">'
+    f'<img src="{team_logo(team_abbr)}" style="width:74px;height:74px;object-fit:contain;">'
     f'</div></div>',
     unsafe_allow_html=True,
 )
 
-# ---------------------------
 # Filters
-# ---------------------------
 st.subheader("Filters")
 f1, f2, f3 = st.columns(3)
-with f1:
-    season_filter = st.selectbox("Season", ["All"] + sorted(logs["SEASON_USED"].unique()))
-with f2:
-    opp_filter = st.selectbox("Opponent", ["All"] + sorted(logs["OPP_ABBR"].unique()))
-with f3:
-    recent_filter = st.selectbox("Recent Games", ["All", "Last 5", "Last 10"])
-
-is_mobile = st.checkbox("📱 Mobile view", value=False, key="mobile_view")
+with f1: season_filter = st.selectbox("Season", ["All"] + sorted(logs["SEASON_USED"].unique()))
+with f2: opp_filter = st.selectbox("Opponent", ["All"] + sorted(logs["OPP_ABBR"].unique()))
+with f3: recent_filter = st.selectbox("Recent Games", ["All", "Last 5", "Last 10"])
 
 flt = logs.copy()
-if season_filter != "All":
-    flt = flt[flt["SEASON_USED"] == season_filter]
-if opp_filter != "All":
-    flt = flt[flt["OPP_ABBR"] == opp_filter]
-flt = flt.sort_values("GAME_DATE", ascending=False)
-if recent_filter == "Last 5":
-    flt = flt.head(5)
-elif recent_filter == "Last 10":
-    flt = flt.head(10)
+if season_filter != "All": flt = flt[flt["SEASON_USED"] == season_filter]
+if opp_filter != "All": flt = flt[flt["OPP_ABBR"] == opp_filter]
+if recent_filter == "Last 5": flt = flt.head(5)
+elif recent_filter == "Last 10": flt = flt.head(10)
 
-# ---------------------------
-# Averages (Season + Rolling)
-# ---------------------------
+# --- SEASON AVERAGES (RESTORED) ---
 st.subheader("Averages")
-
 a, b, c, d = st.columns(4)
+avg = flt[["PTS", "REB", "AST", "FG3M"]].mean().round(2)
+a.metric("PTS", f"{avg['PTS']:.1f}")
+b.metric("REB", f"{avg['REB']:.1f}")
+c.metric("AST", f"{avg['AST']:.1f}")
+d.metric("3PM", f"{avg['FG3M']:.1f}")
 
-season_avg = flt[["PTS", "REB", "AST", "FG3M"]].mean().round(2)
-
-rolling_5 = flt[["PTS_L5", "REB_L5", "AST_L5", "FG3M_L5"]].mean().round(2)
-rolling_10 = flt[["PTS_L10", "REB_L10", "AST_L10", "FG3M_L10"]].mean().round(2)
-
-a.metric("PTS", f"{season_avg['PTS']:.1f}", f"L5 {rolling_5['PTS_L5']:.1f}")
-b.metric("REB", f"{season_avg['REB']:.1f}", f"L5 {rolling_5['REB_L5']:.1f}")
-c.metric("AST", f"{season_avg['AST']:.1f}", f"L5 {rolling_5['AST_L5']:.1f}")
-d.metric("3PM", f"{season_avg['FG3M']:.1f}", f"L5 {rolling_5['FG3M_L5']:.1f}")
-
-st.caption(
-    f"Rolling context — L10: "
-    f"PTS {rolling_10['PTS_L10']:.1f} • "
-    f"REB {rolling_10['REB_L10']:.1f} • "
-    f"AST {rolling_10['AST_L10']:.1f} • "
-    f"3PM {rolling_10['FG3M_L10']:.1f}"
-)
-
-# ---------------------------
-# Parlay UI (top-right popover trigger)
-# ---------------------------
-st.markdown('<div class="parlay-row">', unsafe_allow_html=True)
-with st.popover(f"🧾 Parlay ({len(st.session_state.parlay)})"):
-    if not st.session_state.parlay:
-        st.info("No legs yet")
-    else:
-        total_dec = 1.0
-        for i, leg in enumerate(list(st.session_state.parlay)):
-            total_dec *= float(leg["dec"])
-            cols = st.columns([7, 2])
-            cols[0].write(
-                f"**{leg['player']}** — {leg['stat']} {leg['side']} {leg['line']}  \n"
-                f"Odds: {leg['dec']:.2f} (dec)"
-            )
-            if cols[1].button("❌", key=f"parlay_remove_{i}"):
-                st.session_state.parlay.pop(i)
-                st.rerun()
-
-        st.divider()
-        st.metric("Total Decimal", f"{total_dec:.2f}")
-        st.metric("Total American", decimal_to_american(total_dec))
-
-        if st.button("Clear Parlay", type="secondary"):
-            st.session_state.parlay = []
-            st.rerun()
-st.markdown("</div>", unsafe_allow_html=True)
-
-# ---------------------------
-# Safe defaults (prevents NameError)
-# ---------------------------
-prop_type = "PTS"
-prop_line = 0.0
-side = "Over"
-odds_type = "American"
-odds = -110.0
-
-# ---------------------------
-# Prop Evaluation (narrower on desktop)
-# ---------------------------
+# Prop Evaluation Inputs
 st.subheader("Prop Evaluation")
+STAT_OPTIONS = ["PTS", "REB", "AST", "FG3M", "Pts+Reb+Ast", "Pts+Reb", "Pts+Ast", "Reb+Ast"]
+p1, p2, p3, p4, p5 = st.columns(5)
+with p1: selected_stat = st.selectbox("Stat", STAT_OPTIONS, key="prop_stat")
+with p2: prop_line = st.selectbox("Line", [x * 0.5 for x in range(0, 121)], key="prop_line")
+with p3: side = st.selectbox("Side", ["Over", "Under"], key="prop_side")
+with p4: odds_type = st.selectbox("Odds Type", ["American", "Decimal"], key="prop_odds_type")
+with p5: odds = st.number_input("Odds", value=-110.0 if odds_type == "American" else 1.91, key="prop_odds")
 
-# Rolling form context (latest game row)
-latest = flt.iloc[0] if not flt.empty else None
-
-LINE_OPTIONS = [x * 0.5 for x in range(0, 121)]  # 0.0 .. 60.0
-
-STAT_OPTIONS = [
-    "PTS", "REB", "AST", "FG3M",
-    "Pts+Reb+Ast", "Pts+Reb", "Pts+Ast", "Reb+Ast",
-]
-
-if is_mobile:
-    p1, p2, p3, p4, p5 = st.columns(5)
-    with p1:
-        prop_type = st.selectbox("Stat", STAT_OPTIONS, key="prop_stat")
-    with p2:
-        prop_line = st.selectbox("Line", LINE_OPTIONS, index=0, key="prop_line")
-    with p3:
-        side = st.selectbox("Side", ["Over", "Under"], key="prop_side")
-    with p4:
-        odds_type = st.selectbox("Odds Type", ["American", "Decimal"], key="prop_odds_type")
-    with p5:
-        odds = st.number_input("Odds", value=-110.0 if odds_type == "American" else 1.91, step=1.0 if odds_type == "American" else 0.01, key="prop_odds")
-
-else:
-    left, right = st.columns([2, 3])
-    with left:
-        p1, p2 = st.columns(2)
-        with p1:
-            prop_type = st.selectbox("Stat", STAT_OPTIONS, key="prop_stat")
-        with p2:
-            prop_line = st.selectbox("Line", LINE_OPTIONS, index=0, key="prop_line")
-
-        p3, p4, p5 = st.columns(3)
-        with p3:
-            side = st.selectbox("Side", ["Over", "Under"], key="prop_side")
-        with p4:
-            odds_type = st.selectbox("Odds Type", ["American", "Decimal"], key="prop_odds_type")
-        with p5:
-            odds = st.number_input(
-                "Odds",
-                value=-110.0 if odds_type == "American" else 1.91,
-                step=1.0 if odds_type == "American" else 0.01,
-                key="prop_odds",
-            )
-    with right:
-        st.caption("")
-
-# ---------------------------
-# Hit Rate & Edge (styled green/red)
-# ---------------------------
+# Hit Rate / Edge
 if prop_line > 0 and not flt.empty:
-    analysis_df = flt.copy()
-
-    if side == "Over":
-        analysis_df["HIT"] = analysis_df[prop_type] > float(prop_line)
-    else:
-        analysis_df["HIT"] = analysis_df[prop_type] < float(prop_line)
-
-    total_games = int(len(analysis_df))
-    hits = int(analysis_df["HIT"].sum())
-    hit_rate_pct = (hits / total_games * 100.0) if total_games else 0.0
-
-    if odds_type == "American":
-        dec = american_to_decimal(float(odds))
-    else:
-        dec = float(odds) if float(odds) > 0 else 1.0
-
-    implied_prob_pct = (1.0 / dec * 100.0) if dec > 0 else 0.0
-    edge_pct = hit_rate_pct - implied_prob_pct
-
-    st.subheader("Hit Rate & Edge")
+    flt["HIT"] = flt[selected_stat] > float(prop_line) if side == "Over" else flt[selected_stat] < float(prop_line)
+    hits = int(flt["HIT"].sum())
+    rate = (hits / len(flt) * 100)
+    dec = american_to_decimal(float(odds)) if odds_type == "American" else float(odds)
+    edge = rate - (1/dec * 100)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Games", total_games)
+    c1.metric("Games", len(flt))
     c2.metric("Hits", hits)
-    c3.metric("Hit Rate", f"{hit_rate_pct:.1f}%")
+    c3.metric("Hit Rate", f"{rate:.1f}%")
+    c4.markdown(f'<div style="background:{"#16a34a" if edge > 0 else "#dc2626"};padding:12px;border-radius:10px;text-align:center;color:white;font-weight:800;">{edge:+.1f}% Edge</div>', unsafe_allow_html=True)
 
-    edge_color = "#2e7d32" if edge_pct > 0 else "#c62828"
-    edge_bg = "#e6f7e6" if edge_pct > 0 else "#fdecea"
-    edge_sign = "+" if edge_pct > 0 else ""
-
-    c4.markdown(
-        f'<div style="background:{edge_bg};padding:12px;border-radius:10px;text-align:center;">'
-        f'<div style="font-size:13px;color:{edge_color};font-weight:600;">Edge</div>'
-        f'<div style="font-size:24px;font-weight:800;color:{edge_color};line-height:1.1;">{edge_sign}{edge_pct:.1f}%</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Add to parlay
-    add_cols = st.columns([1, 5])
-    with add_cols[0]:
-        if st.button("➕ Add to Parlay", key="add_to_parlay_btn"):
-            st.session_state.parlay.append(
-                {"player": player_name, "stat": prop_type, "line": float(prop_line), "side": side, "dec": float(dec)}
-            )
-            st.rerun()
+is_mobile = st.checkbox("📱 Mobile view", value=False)
 
 # ---------------------------
-# Game Logs
+# LOGS RENDERING
 # ---------------------------
-st.subheader(f"Showing {len(flt)} games")
-
-if not is_mobile:
-    # Desktop table view
-    show_cols = [
-        "GAME_DATE", "MATCHUP", "MIN",
-        "PTS", "REB", "AST", "FG3M"
-    ]
-
-    st.dataframe(
-        flt[show_cols].reset_index(drop=True),
-        use_container_width=True
-    )
-else:
-    # Mobile card view (compact HTML, include logos + extra stats)
+if is_mobile:
     for _, r in flt.iterrows():
         matchup = str(r["MATCHUP"])
-        t_abbr, o_abbr = parse_matchup_team_opp(matchup)
-        opp_logo_url = team_logo(o_abbr)
-        my_logo_url = team_logo(t_abbr)
-        date_str = r["GAME_DATE"].strftime("%Y-%m-%d")
-        mins = int(r["MIN"]) if pd.notna(r["MIN"]) else 0
+        parts = matchup.split(" ")
+        left_abbr, connector, right_abbr = (parts[0], parts[1], parts[2]) if len(parts) >= 3 else ("???", "VS", "???")
+        
+        # HIGHLIGHTING HELPER
+        def get_style(stat_name):
+            if stat_name == selected_stat or (stat_name == "3PM" and selected_stat == "FG3M"):
+                return "border: 2px solid #3b82f6; background: rgba(59, 130, 246, 0.15); border-radius: 8px;"
+            return "border: 1px solid #222;"
 
-        pra = int(r["Pts+Reb+Ast"])
-        pr = int(r["Pts+Reb"])
-        pa = int(r["Pts+Ast"])
-        ra = int(r["Reb+Ast"])
-
-        # IMPORTANT: keep HTML tight (no extra whitespace between elements)
-        st.markdown(
-            f'<div class="card" style="background:#0e0e0e;border-radius:14px;padding:14px;margin-bottom:12px;color:white;">'
-            f'<div style="display:flex;align-items:center;gap:12px;">'
-            f'<img src="{headshot(int(r["PLAYER_ID"]))}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;">'
-            f'<div style="flex:1;min-width:0;">'
-            f'<div style="font-weight:800;font-size:14px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{player_name}</div>'
-            f'<div style="font-size:12px;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{matchup} • {date_str}</div>'
+        card_html = (
+            f'<div style="background:#111; border-radius:14px; padding:16px; margin-bottom:16px; border:1px solid #262626; color: white;">'
+            f'<div style="display:flex; justify-content:space-between; margin-bottom:12px;">'
+            f'<span style="color:#3b82f6; font-weight:800;">{r["GAME_DATE"].strftime("%a, %b %d").upper()}</span>'
+            f'<span style="font-weight:700;">⏱ {int(r["MIN"])} MIN</span></div>'
+            
+            f'<div style="display:flex; justify-content:center; gap:25px; padding-bottom:12px; border-bottom:1px solid #222;">'
+            f'<div style="text-align:center;"><img src="{team_logo(left_abbr)}" style="width:35px;"><br><b>{left_abbr}</b></div>'
+            f'<div style="margin-top:8px; font-weight:900; color:#444;">{connector}</div>'
+            f'<div style="text-align:center;"><img src="{team_logo(right_abbr)}" style="width:35px;"><br><b>{right_abbr}</b></div>'
             f'</div>'
-            f'<div style="display:flex;align-items:center;gap:10px;">'
-            f'{f"<img src={my_logo_url!r} style=\'width:28px;height:28px;object-fit:contain;\'>" if my_logo_url else ""}'
-            f'{f"<img src={opp_logo_url!r} style=\'width:28px;height:28px;object-fit:contain;\'>" if opp_logo_url else ""}'
-            f'</div>'
-            f'</div>'
-            f'<div style="display:flex;justify-content:space-between;margin-top:12px;text-align:center;">'
-            f'<div><div style="font-size:20px;font-weight:900;">{int(r["PTS"])}</div><div style="font-size:10px;color:#aaa;">PTS</div></div>'
-            f'<div><div style="font-size:20px;font-weight:900;">{int(r["REB"])}</div><div style="font-size:10px;color:#aaa;">REB</div></div>'
-            f'<div><div style="font-size:20px;font-weight:900;">{int(r["AST"])}</div><div style="font-size:10px;color:#aaa;">AST</div></div>'
-            f'<div><div style="font-size:20px;font-weight:900;">{int(r["FG3M"])}</div><div style="font-size:10px;color:#aaa;">3PM</div></div>'
-            f'</div>'
-            f'<div style="display:flex;justify-content:space-between;margin-top:10px;text-align:center;opacity:.95;">'
-            f'<div><div style="font-size:14px;font-weight:800;">{pra}</div><div style="font-size:10px;color:#aaa;">PRA</div></div>'
-            f'<div><div style="font-size:14px;font-weight:800;">{pr}</div><div style="font-size:10px;color:#aaa;">P+R</div></div>'
-            f'<div><div style="font-size:14px;font-weight:800;">{pa}</div><div style="font-size:10px;color:#aaa;">P+A</div></div>'
-            f'<div><div style="font-size:14px;font-weight:800;">{ra}</div><div style="font-size:10px;color:#aaa;">R+A</div></div>'
-            f'</div>'
-            f'<div style="margin-top:10px;font-size:11px;color:#aaa;">⏱ {mins} min</div>'
-            f'</div>',
-            unsafe_allow_html=True,
+            
+            f'<div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; text-align:center; margin-top:12px;">'
+            f'<div style="{get_style("PTS")}"><b>{int(r["PTS"])}</b><br><small style="color:#aaa;">PTS</small></div>'
+            f'<div style="{get_style("REB")}"><b>{int(r["REB"])}</b><br><small style="color:#aaa;">REB</small></div>'
+            f'<div style="{get_style("AST")}"><b>{int(r["AST"])}</b><br><small style="color:#aaa;">AST</small></div>'
+            f'<div style="{get_style("FG3M")}"><b>{int(r["FG3M"])}</b><br><small style="color:#aaa;">3PM</small></div>'
+            f'<div style="{get_style("Pts+Reb+Ast")}"><b>{int(r["Pts+Reb+Ast"])}</b><br><small style="color:#aaa;">PRA</small></div>'
+            f'<div style="{get_style("Pts+Reb")}"><b>{int(r["Pts+Reb"])}</b><br><small style="color:#aaa;">PR</small></div>'
+            f'<div style="{get_style("Pts+Ast")}"><b>{int(r["Pts+Ast"])}</b><br><small style="color:#aaa;">PA</small></div>'
+            f'<div style="{get_style("Reb+Ast")}"><b>{int(r["Reb+Ast"])}</b><br><small style="color:#aaa;">RA</small></div>'
+            f'</div></div>'
         )
+        st.markdown(card_html, unsafe_allow_html=True)
+else:
+    st.dataframe(flt[["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "FG3M", "Pts+Reb+Ast", "Pts+Reb", "Pts+Ast", "Reb+Ast"]], use_container_width=True)

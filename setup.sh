@@ -4,8 +4,10 @@ mkdir -p ~/.streamlit/
 
 cat <<EOF > ~/.streamlit/config.toml
 [server]
-headless = true
-port = $PORT
 enableCORS = false
-address = "0.0.0.0"
+enableXsrfProtection = false
+
+[theme]
+primaryColor = "#F63366"
+backgroundColor = "#FFFFFF"
 EOF
