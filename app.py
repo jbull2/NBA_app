@@ -10,22 +10,28 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 from services.nba_player_logs import fetch_player_logs
 from nba_api.stats.static import players
-from auth import require_login
 
-# ---------------------------
-# AUTH
-# ---------------------------
 from auth import require_login, logout
 
-if not require_login():
-    st.stop()
+# ---------------------------
+# Feature flags
+# ---------------------------
+USE_AUTH = False  # set to False to disable login
 
-with st.sidebar:
-    st.markdown("### Account")
-    st.write(f"Logged in as **{st.session_state.user}**")
+# ---------------------------
+# AUTH (optional)
+# ---------------------------
+if USE_AUTH:
 
-    if st.button("Logout"):
-        logout()
+    if not require_login():
+        st.stop()
+
+    with st.sidebar:
+        st.markdown("### Account")
+        st.write(f"Logged in as **{st.session_state.get('user', '')}**")
+
+        if st.button("Logout"):
+            logout()
 
 # ---------------------------
 # Page config

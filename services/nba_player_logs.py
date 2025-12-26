@@ -18,6 +18,38 @@ def team_logo_url(team_abbr: str) -> str:
 
 
 # ---------------------------
+# Rolling feature helper (ML-ready)
+# ---------------------------
+def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds rolling last-5 and last-10 averages for core stats.
+    Uses shift(1) to prevent data leakage.
+    Assumes GAME_DATE exists.
+    """
+
+    df = df.sort_values("GAME_DATE").reset_index(drop=True)
+
+    rolling_stats = ["PTS", "REB", "AST", "FG3M", "MIN"]
+
+    for stat in rolling_stats:
+        df[f"{stat}_L5"] = (
+            df[stat]
+            .rolling(window=5, min_periods=1)
+            .mean()
+            .shift(1)
+        )
+
+        df[f"{stat}_L10"] = (
+            df[stat]
+            .rolling(window=10, min_periods=1)
+            .mean()
+            .shift(1)
+        )
+
+    return df.sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------
 # Cached wrapper
 # ---------------------------
 @lru_cache(maxsize=128)
@@ -36,6 +68,7 @@ def fetch_player_logs(
     """
     Fetch multi-season NBA game logs for a single player.
     Stable version: NO pace, NO usage, NO external joins.
+    Now includes ML-ready rolling features.
     """
 
     # ---------------------------
@@ -93,25 +126,19 @@ def fetch_player_logs(
     logs = logs[logs["MIN"] > 0].reset_index(drop=True)
 
     # ---------------------------
-    # Opponent abbreviation (FIX)
-    # ---------------------------
-    # ---------------------------
-    # Player team abbreviation (SAFE)
+    # Team / Opponent extraction (SAFE)
     # ---------------------------
     logs["TEAM_ABBR"] = logs["MATCHUP"].str[:3]
     logs["OPP_ABBR"] = logs["MATCHUP"].str[-3:]
+
+    logs["TEAM"] = logs["TEAM_ABBR"]
+    logs["OPPONENT"] = logs["OPP_ABBR"]
 
     # ---------------------------
     # Metadata (UI-safe)
     # ---------------------------
     logs["PLAYER_NAME"] = player_name
     logs["PLAYER_ID"] = player_id
-
-    # ---------------------------
-    # Team / Opponent extraction
-    # ---------------------------
-    logs["TEAM"] = logs["MATCHUP"].str[:3]
-    logs["OPPONENT"] = logs["MATCHUP"].str[-3:]
 
     # ---------------------------
     # Image URLs for UI
@@ -139,5 +166,10 @@ def fetch_player_logs(
 
     logs["DOUBLE_DOUBLE"] = (dd_count >= 2).astype(int)
     logs["TRIPLE_DOUBLE"] = (dd_count >= 3).astype(int)
+
+    # ---------------------------
+    # Rolling features (ML foundation)
+    # ---------------------------
+    logs = add_rolling_features(logs)
 
     return logs

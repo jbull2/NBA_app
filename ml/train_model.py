@@ -2,7 +2,7 @@ import pandas as pd
 import joblib
 from pathlib import Path
 
-from services.nba_player_logs import fetch_player_logs
+from NBA_app.services.nba_player_logs import fetch_player_logs
 from NBA_app.ml.feature_engineering import add_rolling_features
 
 from sklearn.ensemble import RandomForestRegressor
